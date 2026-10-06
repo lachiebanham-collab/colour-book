@@ -82,7 +82,8 @@ TEMPLATE = """<!doctype html>
     color: var(--ink-muted); background: none; border: none; border-radius: 8px; padding: 6px 10px;
     cursor: pointer; transition: color 0.28s ease; }
   .seg-toggle button.active { color: var(--ink); }
-  #graph-view-toggle { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); z-index: 5; }
+  #graph-view-toggle { position: fixed; top: 18px; left: 50%; z-index: 5;
+    transform: translateX(-50%) scale(var(--map-scale, 1)); transform-origin: 50% 0; }
   /* detail gallery — editorial scatter (photos at their natural aspect, mixed
      sizes, staggered across a 12-col grid with lots of air) on a warm ground.
      Positions are computed in JS (layoutScatter); under 700px it collapses to
@@ -302,11 +303,26 @@ function fibonacciSphere(count) {
   return pts;
 }
 
+// Map scale: the bubbles, thumbnails, labels and spacing were tuned for a
+// ~1440x900 laptop viewport and are fixed pixel sizes, so on a big monitor
+// they read as tiny dots in a sea of space. MAP_SCALE grows them with the
+// viewport (by the tighter axis, so a tall layout still fits), never below
+// the original size and capped so a huge screen doesn't get cartoonish.
+let MAP_SCALE = 1;
+function computeMapScale() {
+  return Math.min(2.4, Math.max(1, Math.min(W() / 1440, H() / 900)));
+}
+function applyMapScale() {
+  MAP_SCALE = computeMapScale();
+  document.documentElement.style.setProperty('--map-scale', MAP_SCALE);
+}
+applyMapScale();
+
 function buildThumbs(n) {
   const previewCount = Math.min(n.photos.length, Math.max(5, Math.min(14, Math.round(Math.sqrt(n.count) * 2.2))));
   const spherePts = fibonacciSphere(previewCount);
   const sphereR = n.r * 0.72; // < n.r, leaving room for tile half-size + "spaced out" gaps
-  const baseSide = Math.max(16, (sphereR / Math.sqrt(previewCount)) * 1.75);
+  const baseSide = Math.max(16 * MAP_SCALE, (sphereR / Math.sqrt(previewCount)) * 1.75);
 
   return spherePts.map((pt, i) => ({
     photo: n.photos[i],
@@ -314,7 +330,7 @@ function buildThumbs(n) {
     sizeScale: matchScale(i, previewCount),
     baseSide,
     bobPhase: rnd(n.id * 211 + i * 7 + 3) * Math.PI * 2,
-    bobAmp: 1.5 + rnd(n.id * 211 + i * 7 + 4) * 2,
+    bobAmp: (1.5 + rnd(n.id * 211 + i * 7 + 4) * 2) * MAP_SCALE,
     bobSpeed: 0.5 + rnd(n.id * 211 + i * 7 + 5) * 0.4,
   }));
 }
@@ -335,7 +351,7 @@ function buildGraph(groupsData, edgesData, showColourDot = true) {
   const spreadY = Math.max(180, H() * 0.32);
   const nodes = groupsData.map((g, i) => ({
     ...g,
-    r: 44 + Math.sqrt(g.count) * 11,
+    r: (44 + Math.sqrt(g.count) * 11) * MAP_SCALE,
     x: W()/2 + Math.cos(i / groupsData.length * Math.PI * 2) * spreadX,
     y: H()/2 + Math.sin(i / groupsData.length * Math.PI * 2) * spreadY,
     vx: 0, vy: 0,
@@ -345,7 +361,7 @@ function buildGraph(groupsData, edgesData, showColourDot = true) {
 
   const edgeEls = edges.map(e => {
     const line = el('line', { class: 'edge' });
-    line.setAttribute('stroke-width', 0.3 + e.similarity * 0.8);
+    line.setAttribute('stroke-width', (0.3 + e.similarity * 0.8) * MAP_SCALE);
     line.style.opacity = 0.05 + e.similarity * 0.14;
     svg.appendChild(line);
     return { el: line, data: e };
@@ -397,11 +413,12 @@ function buildGraph(groupsData, edgesData, showColourDot = true) {
     // still being built inside a detached <g>), so DOM text-metrics calls
     // aren't reliable here. DotGothic16 is a fixed-width pixel font, so a
     // flat per-character estimate holds up fine.
-    const labelFontSize = 16;
-    const labelY = n.r + 18;
+    const S = MAP_SCALE;
+    const labelFontSize = 16 * S;
+    const labelY = n.r + 18 * S;
     const charW = labelFontSize * 0.62;
     const dotR = labelFontSize * 0.26;
-    const dotGap = 6;
+    const dotGap = 6 * S;
     const textWidth = n.label.length * charW;
     const rowWidth = (showColourDot ? dotR * 2 + dotGap : 0) + textWidth;
     const rowStartX = -rowWidth / 2;
@@ -419,10 +436,12 @@ function buildGraph(groupsData, edgesData, showColourDot = true) {
       y: labelY, 'text-anchor': 'start',
     });
     label.textContent = n.label;
-    const sublabel = el('text', { class: 'node-sublabel', y: n.r + 35 });
+    label.style.fontSize = labelFontSize + 'px';
+    const sublabel = el('text', { class: 'node-sublabel', y: n.r + 35 * S });
+    sublabel.style.fontSize = 10 * S + 'px';
     // how far the label block reaches past the bubble — the physics bounds use
     // these so labels never get pushed off the bottom/sides of the screen
-    n.labelBelow = 35 + 4;            // sublabel baseline + descenders
+    n.labelBelow = (35 + 4) * S;      // sublabel baseline + descenders
     n.labelHalfW = rowWidth / 2;
     sublabel.textContent = n.count + (n.count === 1 ? ' photo' : ' photos');
     g.appendChild(label);
@@ -486,13 +505,14 @@ function stepPhysics(graph) {
   // what was actually pulling everything back into a knot: the initial
   // layout and the centering pull below were never the dominant force here.
   // Scaling both with screen width lets that natural resting size grow too.
-  const spacingScale = Math.min(2.8, Math.max(1, W() / 750));
+  // (divided by MAP_SCALE: radii and gaps below already grow with it)
+  const spacingScale = Math.min(2.8, Math.max(1, W() / 750 / MAP_SCALE));
   for (let i = 0; i < n.length; i++) {
     for (let j = i + 1; j < n.length; j++) {
       const a = n[i], b = n[j];
       let dx = a.x - b.x, dy = a.y - b.y;
       let dist = Math.sqrt(dx*dx + dy*dy) || 1;
-      const minDist = a.r + b.r + 36;
+      const minDist = a.r + b.r + 36 * MAP_SCALE;
       // a narrower personal-space zone (was 2.2x) so most pairs sit outside
       // it at rest instead of hovering right on its edge — that boundary is
       // an unstable equilibrium, which is what read as constant jitter
@@ -509,14 +529,14 @@ function stepPhysics(graph) {
     const a = graph.nodeById[e.source], b = graph.nodeById[e.target];
     let dx = b.x - a.x, dy = b.y - a.y;
     let dist = Math.sqrt(dx*dx + dy*dy) || 1;
-    const target = (a.r + b.r) + 90 * spacingScale * (1 - e.similarity);
+    const target = (a.r + b.r) + 90 * MAP_SCALE * spacingScale * (1 - e.similarity);
     const force = (dist - target) / dist * 0.0032;
     const fx = dx * force, fy = dy * force;
     if (!a.fixed) { a.vx += fx; a.vy += fy; }
     if (!b.fixed) { b.vx -= fx; b.vy -= fy; }
   }
   const cx = W()/2, cy = H()/2;
-  const maxV = 2; // hard velocity cap — stops any force spike turning into a visible snap
+  const maxV = 2 * MAP_SCALE; // hard velocity cap — stops any force spike turning into a visible snap
   // the pull back toward centre is a fixed-strength spring, but repulsion is
   // sized off fixed pixel radii — on a small screen that balance is fine,
   // but on a big one it reels bubbles into a tight knot in the middle
@@ -541,7 +561,7 @@ function stepPhysics(graph) {
     const halfW = Math.max(node.r, node.labelHalfW || 0);
     const below = node.r + (node.labelBelow || 0);
     node.x = Math.max(halfW + 16, Math.min(W() - halfW - 16, node.x));
-    node.y = Math.max(node.r + 60, Math.min(H() - below - 16, node.y));
+    node.y = Math.max(node.r + 60 * MAP_SCALE, Math.min(H() - below - 16, node.y));
   }
 }
 
@@ -732,6 +752,22 @@ function switchGraphView(mode) {
 }
 graphViewButtons.forEach(b => b.addEventListener('click', () => switchGraphView(b.dataset.mode)));
 positionPill(graphViewToggle, false);
+
+// bubble sizes are baked in when a graph is built, so a resize that changes
+// MAP_SCALE noticeably (window dragged to/from a big monitor, fullscreen)
+// rebuilds the current view at the new scale
+let mapResizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(mapResizeTimer);
+  mapResizeTimer = setTimeout(() => {
+    if (transitioningGraph || Math.abs(computeMapScale() - MAP_SCALE) < 0.05) return;
+    applyMapScale();
+    svg.innerHTML = '';
+    const groupsData = graphMode === 'location' ? buildLocationGroups() : colourGroups;
+    const edgesData = graphMode === 'location' ? buildLocationTimelineEdges(groupsData) : colourEdges;
+    current = buildGraph(groupsData, edgesData, graphMode !== 'location');
+  }, 200);
+});
 
 // two detail-page view modes: 'flat' (one gallery) and 'location' (photos
 // split into a section per city). Lives inside the

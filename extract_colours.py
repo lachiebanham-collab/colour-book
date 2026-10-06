@@ -28,7 +28,10 @@ K = 5  # finer clusters than a flat dominant-colour split, so a small saturated
 ITERATIONS = 10
 NEAR_WHITE_LUMINANCE = 0.95
 NEAR_BLACK_LUMINANCE = 0.05
-THUMB_DIM = 72
+# 200px so the map's bubble thumbnails stay sharp when MAP_SCALE enlarges them
+# on big/4K screens (72px read as blurry there)
+THUMB_DIM = 200
+THUMB_QUALITY = 70
 # sharp copies for the detail view — written as files next to the HTML (not
 # inlined) so the page stays light and the browser lazy-loads them per group
 DISPLAY_DIM = 1600
@@ -99,7 +102,7 @@ def order_by_vividness(centroids, sizes):
 def make_thumbnail(img):
     thumb = ImageOps.fit(img, (THUMB_DIM, THUMB_DIM), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
-    thumb.save(buf, format="JPEG", quality=58)
+    thumb.save(buf, format="JPEG", quality=THUMB_QUALITY, optimize=True)
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
@@ -282,7 +285,8 @@ def main():
             # cheap patches for entries cached before a field existed — EXIF
             # date/camera, aspect ratio, display copy — no colour recompute
             needs_display = not display_path.exists()
-            if needs_display or any(f not in entry for f in ("taken_at", "camera", "aspect")):
+            needs_thumb = entry.get("thumb_dim") != THUMB_DIM
+            if needs_display or needs_thumb or any(f not in entry for f in ("taken_at", "camera", "aspect")):
                 try:
                     with Image.open(p) as img:
                         if "taken_at" not in entry:
@@ -294,6 +298,9 @@ def main():
                         if needs_display:
                             write_display_copy(oriented.convert("RGB"), display_path)
                             display_count += 1
+                        if needs_thumb:
+                            entry["thumbnail"] = make_thumbnail(oriented.convert("RGB"))
+                            entry["thumb_dim"] = THUMB_DIM
                     backfilled_count += 1
                 except Exception as e:
                     print(f"  ! couldn't backfill {key}: {e}")
@@ -312,6 +319,7 @@ def main():
             "fingerprint": fingerprint,
             "colours": colours,
             "thumbnail": thumbnail,
+            "thumb_dim": THUMB_DIM,
             "display": f"photos/{display_name}",
             "phash": phash,
             "taken_at": taken_at,
@@ -341,7 +349,7 @@ def main():
     print(f"  new: {new_count}, updated: {stale_count}, removed: {len(removed)}, "
           f"unchanged: {len(photo_paths) - new_count - stale_count}")
     if backfilled_count:
-        print(f"  backfilled taken_at for {backfilled_count} existing entries")
+        print(f"  backfilled missing fields for {backfilled_count} existing entries")
     if display_count:
         print(f"  wrote display copies for {display_count} existing entries")
     if skipped_heic:

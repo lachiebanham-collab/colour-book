@@ -15,7 +15,7 @@ import numpy as np
 
 DEFAULT_GROUPS = 9
 RESTARTS = 8
-ITERATIONS = 25
+ITERATIONS = 300  # upper bound; each run stops as soon as assignments settle
 DUP_HAMMING_THRESHOLD = 6  # dHash bits that may differ and still count as the same photo
 
 
@@ -124,7 +124,13 @@ def kmeans(points, k, iterations=ITERATIONS, restarts=RESTARTS, seed=7, init=Non
         assignments = None
         for _ in range(iterations):
             dists = ((points[:, None, :] - centroids[None, :, :]) ** 2).sum(axis=2)
-            assignments = dists.argmin(axis=1)
+            new_assignments = dists.argmin(axis=1)
+            # run to convergence: stopping early left re-runs (warm-started
+            # from the saved groups) still settling, so a borderline photo
+            # could hop groups on a rebuild where nothing had changed
+            if assignments is not None and np.array_equal(new_assignments, assignments):
+                break
+            assignments = new_assignments
             for i in range(k):
                 members = points[assignments == i]
                 if len(members) > 0:
