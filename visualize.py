@@ -355,6 +355,11 @@ function buildGraph(groupsData, edgesData, showColourDot = true) {
     x: W()/2 + Math.cos(i / groupsData.length * Math.PI * 2) * spreadX,
     y: H()/2 + Math.sin(i / groupsData.length * Math.PI * 2) * spreadY,
     vx: 0, vy: 0,
+    // per-bubble wall offsets (0–1, golden-ratio spaced so neighbours always
+    // differ): repulsion presses outer bubbles against the screen edges, and
+    // with one shared limit they'd all rest on the same line — a flat row
+    // along the bottom. Staggered limits leave them at different heights.
+    wallStagger: [(i * 0.618 + 0.3) % 1, (i * 0.382 + 0.7) % 1, (i * 0.755 + 0.1) % 1],
   }));
   const nodeById = Object.fromEntries(nodes.map(n => [n.id, n]));
   const edges = edgesData;
@@ -560,8 +565,11 @@ function stepPhysics(graph) {
     // on screen, with a 16px margin; top leaves room for the view toggle
     const halfW = Math.max(node.r, node.labelHalfW || 0);
     const below = node.r + (node.labelBelow || 0);
-    node.x = Math.max(halfW + 16, Math.min(W() - halfW - 16, node.x));
-    node.y = Math.max(node.r + 60 * MAP_SCALE, Math.min(H() - below - 16, node.y));
+    const [sBottom, sTop, sSide] = node.wallStagger || [0, 0, 0];
+    const insetX = 16 + sSide * W() * 0.04;
+    node.x = Math.max(halfW + insetX, Math.min(W() - halfW - insetX, node.x));
+    node.y = Math.max(node.r + 60 * MAP_SCALE + sTop * H() * 0.06,
+      Math.min(H() - below - 16 - sBottom * H() * 0.12, node.y));
   }
 }
 
