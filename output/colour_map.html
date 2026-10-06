@@ -406,6 +406,10 @@ function buildGraph(groupsData, edgesData, showColourDot = true) {
     });
     label.textContent = n.label;
     const sublabel = el('text', { class: 'node-sublabel', y: n.r + 35 });
+    // how far the label block reaches past the bubble — the physics bounds use
+    // these so labels never get pushed off the bottom/sides of the screen
+    n.labelBelow = 35 + 4;            // sublabel baseline + descenders
+    n.labelHalfW = rowWidth / 2;
     sublabel.textContent = n.count + (n.count === 1 ? ' photo' : ' photos');
     g.appendChild(label);
     g.appendChild(sublabel);
@@ -518,8 +522,12 @@ function stepPhysics(graph) {
       node.vy = Math.max(-maxV, Math.min(maxV, node.vy));
       node.x += node.vx; node.y += node.vy;
     }
-    node.x = Math.max(node.r + 10, Math.min(W() - node.r - 10, node.x));
-    node.y = Math.max(node.r + 60, Math.min(H() - node.r - 10, node.y));
+    // keep the whole bubble AND its label (below it, possibly wider than it)
+    // on screen, with a 16px margin; top leaves room for the view toggle
+    const halfW = Math.max(node.r, node.labelHalfW || 0);
+    const below = node.r + (node.labelBelow || 0);
+    node.x = Math.max(halfW + 16, Math.min(W() - halfW - 16, node.x));
+    node.y = Math.max(node.r + 60, Math.min(H() - below - 16, node.y));
   }
 }
 
