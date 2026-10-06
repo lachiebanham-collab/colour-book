@@ -49,8 +49,10 @@ dropped from the cache, the map and `output/photos/`.
    an inlined thumbnail in `cache/colours.json`, and writes a 1600px display
    copy to `output/photos/`.
 2. **`cluster.py`** — first **dedupes** near-identical photos (e.g. a
-   `"IMG_1234.JPG"` + `"IMG_1234 2.JPG"` export pair) by comparing perceptual
-   hashes, so duplicates don't inflate a group's count or clutter its preview.
+   `"IMG_1234.JPG"` + `"IMG_1234 2.JPG"` export pair): same EXIF capture time
+   to the millisecond (crops/re-edits of one shot) or near-identical perceptual
+   hashes. The tallest version is kept (a 9:16 crop beats the 4:3 original),
+   so duplicates don't inflate a group's count or clutter its preview.
    Takes each remaining photo's saturation-ranked colour, converts to CIELAB
    (perceptually uniform), k-means clusters into N colour groups, orders each
    group's photos by closeness to the centroid (most representative first),

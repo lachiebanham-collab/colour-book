@@ -24,23 +24,30 @@ def hamming(hex_a, hex_b):
 
 
 def dedupe_keys(cache, keys):
-    """Collapse near-identical photos (e.g. "IMG_1234.JPG" + "IMG_1234 2.JPG"
-    export pairs) to a single representative, by perceptual hash. O(n^2) but
-    n is photo-collection-sized, not pixel-sized, so that's fine."""
-    ordered = sorted(keys, key=lambda k: (len(k), k))  # prefer the shorter/plainer filename
-    kept, kept_hashes = [], []
+    """Collapse duplicate photos (e.g. "IMG_1234.JPG" + "IMG_1234 2.JPG"
+    export pairs) to a single representative. Two photos are the same if
+    either their EXIF capture time matches to the millisecond (a crop or
+    re-edit of one original — cropping changes the perceptual hash, so the
+    hash alone misses these) or their perceptual hashes are near-identical.
+    The tallest version wins (a 9:16 crop over the 4:3 original), then the
+    shorter/plainer filename. O(n^2) but n is photo-collection-sized, so fine."""
+    ordered = sorted(keys, key=lambda k: (cache[k].get("aspect") or 1.0, len(k), k))
+    kept, kept_hashes, kept_times = [], [], set()
     dup_count = 0
     for k in ordered:
         h = cache[k].get("phash")
-        if h is None:
-            kept.append(k)
-            kept_hashes.append(None)
-            continue
-        if any(kh is not None and hamming(h, kh) <= DUP_HAMMING_THRESHOLD for kh in kept_hashes):
+        t = cache[k].get("taken_at")
+        # only sub-second timestamps are precise enough to call two files the
+        # same shot; a bare "HH:MM:SS" could be a burst of different frames
+        same_shot = t is not None and "." in t and t in kept_times
+        if same_shot or (h is not None and any(
+                kh is not None and hamming(h, kh) <= DUP_HAMMING_THRESHOLD for kh in kept_hashes)):
             dup_count += 1
             continue
         kept.append(k)
         kept_hashes.append(h)
+        if t is not None:
+            kept_times.add(t)
     return kept, dup_count
 
 
