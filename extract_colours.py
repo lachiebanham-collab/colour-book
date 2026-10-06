@@ -29,6 +29,10 @@ ITERATIONS = 10
 NEAR_WHITE_LUMINANCE = 0.95
 NEAR_BLACK_LUMINANCE = 0.05
 THUMB_DIM = 72
+# sharp copies for the detail view — written as files next to the HTML (not
+# inlined) so the page stays light and the browser lazy-loads them per group
+DISPLAY_DIM = 1600
+DISPLAY_QUALITY = 82
 
 # saturation-priority selection (mirrors ColourExtractor.pickVividColour's scoring,
 # without the green/blue hue exclusion — that's specific to Tone's combination
@@ -99,6 +103,19 @@ def make_thumbnail(img):
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+def display_filename(key):
+    """Flat, URL-safe-ish filename for a photo's display copy (subfolders in the
+    source dir are folded into the name so copies all live in one folder)."""
+    return str(Path(key).with_suffix(".jpg")).replace("/", "__")
+
+
+def write_display_copy(img, out_path):
+    copy = img.copy()
+    copy.thumbnail((DISPLAY_DIM, DISPLAY_DIM), Image.Resampling.LANCZOS)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    copy.save(out_path, format="JPEG", quality=DISPLAY_QUALITY, optimize=True, progressive=True)
+
+
 def dhash(img, hash_size=8):
     """Difference hash — cheap perceptual fingerprint used to catch duplicate/
     near-duplicate photos (e.g. a "IMG_1234.JPG" + "IMG_1234 2.JPG" export pair)
@@ -140,12 +157,45 @@ def read_taken_at(img):
     return iso
 
 
-def extract_dominant_colours(path, k=K):
+def read_camera(img):
+    """Camera + exposure settings for the detail gallery's captions. Values are
+    plain numbers (focal length is the 35mm equivalent — "77mm" reads better
+    than an iPhone's physical "9mm"). Missing tags are simply left out."""
+    try:
+        exif = img.getexif()
+        tags = {ExifTags.TAGS.get(k, k): v for k, v in exif.items()}
+        tags.update({ExifTags.TAGS.get(k, k): v for k, v in exif.get_ifd(0x8769).items()})
+    except Exception:
+        return None
+
+    def num(v):
+        if isinstance(v, (tuple, list)):
+            v = v[0] if v else None
+        try:
+            return float(v)
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+
+    camera = {
+        "model": str(tags["Model"]).strip() if tags.get("Model") else None,
+        "focal35": num(tags.get("FocalLengthIn35mmFilm")) or num(tags.get("FocalLength")),
+        "fnumber": num(tags.get("FNumber")),
+        "exposure": num(tags.get("ExposureTime")),
+        "iso": num(tags.get("ISOSpeedRatings") or tags.get("PhotographicSensitivity")),
+    }
+    camera = {k: v for k, v in camera.items() if v}
+    return camera or None
+
+
+def extract_dominant_colours(path, display_path, k=K):
     img = Image.open(path)
     taken_at = read_taken_at(img)
+    camera = read_camera(img)
     img = ImageOps.exif_transpose(img)
     img = img.convert("RGB")
+    aspect = round(img.width / img.height, 4)
 
+    write_display_copy(img, display_path)
     thumbnail_data_url = make_thumbnail(img)
     phash = dhash(img)
 
@@ -170,7 +220,7 @@ def extract_dominant_colours(path, k=K):
             "rgb": [r, g, b],
             "weight": round(float(size) / float(total), 4) if total else 0.0,
         })
-    return results, thumbnail_data_url, phash, taken_at
+    return results, thumbnail_data_url, phash, taken_at, camera, aspect
 
 
 def load_cache(cache_path):
@@ -196,35 +246,62 @@ def main():
     force = "--force" in sys.argv[3:]
 
     cache = {} if force else load_cache(cache_path)
+    # project/cache/colours.json -> project/output/photos/ (same convention as
+    # cluster.py's data/ lookup); cache stores paths relative to output/
+    display_dir = cache_path.parent.parent / "output" / "photos"
+
+    # photos to leave out of the map entirely (filenames relative to the photos
+    # dir, e.g. ["IMG_7578.JPG"]) — the originals are untouched, but they're
+    # treated as absent, so their cache entry + display copy get cleaned up below
+    excluded_path = cache_path.parent.parent / "data" / "excluded.json"
+    excluded = set(json.loads(excluded_path.read_text())) if excluded_path.exists() else set()
 
     photo_paths = sorted(
         p for p in photos_dir.rglob("*")
         if p.suffix.lower() in IMAGE_EXTS and p.is_file()
+        and str(p.relative_to(photos_dir)) not in excluded
     )
+    if excluded:
+        print(f"Excluding {len(excluded)} photo(s) listed in {excluded_path}")
 
     new_count = 0
     stale_count = 0
     backfilled_count = 0
+    display_count = 0
     skipped_heic = 0
     for p in photo_paths:
         key = str(p.relative_to(photos_dir))
         stat = p.stat()
         fingerprint = f"{stat.st_mtime_ns}:{stat.st_size}"
 
+        display_name = display_filename(key)
+        display_path = display_dir / display_name
+
         entry = cache.get(key)
         if entry is not None and entry.get("fingerprint") == fingerprint:
-            if "taken_at" not in entry:
-                # cheap patch: just the EXIF date, no colour recompute
+            # cheap patches for entries cached before a field existed — EXIF
+            # date/camera, aspect ratio, display copy — no colour recompute
+            needs_display = not display_path.exists()
+            if needs_display or any(f not in entry for f in ("taken_at", "camera", "aspect")):
                 try:
                     with Image.open(p) as img:
-                        entry["taken_at"] = read_taken_at(img)
+                        if "taken_at" not in entry:
+                            entry["taken_at"] = read_taken_at(img)
+                        if "camera" not in entry:
+                            entry["camera"] = read_camera(img)
+                        oriented = ImageOps.exif_transpose(img)
+                        entry["aspect"] = round(oriented.width / oriented.height, 4)
+                        if needs_display:
+                            write_display_copy(oriented.convert("RGB"), display_path)
+                            display_count += 1
                     backfilled_count += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"  ! couldn't backfill {key}: {e}")
+            entry["display"] = f"photos/{display_name}"
             continue
 
         try:
-            colours, thumbnail, phash, taken_at = extract_dominant_colours(p)
+            colours, thumbnail, phash, taken_at, camera, aspect = extract_dominant_colours(p, display_path)
         except Exception as e:
             print(f"  ! skipped {key}: {e}")
             if p.suffix.lower() in (".heic", ".heif"):
@@ -235,8 +312,11 @@ def main():
             "fingerprint": fingerprint,
             "colours": colours,
             "thumbnail": thumbnail,
+            "display": f"photos/{display_name}",
             "phash": phash,
             "taken_at": taken_at,
+            "camera": camera,
+            "aspect": aspect,
         }
         if entry is None:
             new_count += 1
@@ -248,6 +328,12 @@ def main():
     removed = [k for k in cache if k not in live_keys]
     for k in removed:
         del cache[k]
+    # ...and their display copies
+    live_display = {display_filename(k) for k in live_keys}
+    if display_dir.exists():
+        for f in display_dir.glob("*.jpg"):
+            if f.name not in live_display:
+                f.unlink()
 
     save_cache(cache_path, cache)
 
@@ -256,6 +342,8 @@ def main():
           f"unchanged: {len(photo_paths) - new_count - stale_count}")
     if backfilled_count:
         print(f"  backfilled taken_at for {backfilled_count} existing entries")
+    if display_count:
+        print(f"  wrote display copies for {display_count} existing entries")
     if skipped_heic:
         print(f"  ! {skipped_heic} HEIC/HEIF files skipped — install pillow-heif "
               f"(pip install pillow-heif) and re-run with --force to include them")

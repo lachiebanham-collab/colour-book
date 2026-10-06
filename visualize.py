@@ -16,6 +16,7 @@ TEMPLATE = """<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Colour Map — __TOTAL__ photos, __GROUPS__ groups</title>
 <style>
   /* subset to printable Basic Latin (U+0020–007E) — the only characters any
@@ -36,6 +37,7 @@ TEMPLATE = """<!doctype html>
     --ink-muted: #6b6b6b;
     --border: rgba(0,0,0,0.08);
     --edge: rgba(60,60,60,0.55);
+    --gallery: #f6f4ef;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -45,14 +47,12 @@ TEMPLATE = """<!doctype html>
       --ink-muted: #9a9aa2;
       --border: rgba(255,255,255,0.10);
       --edge: rgba(230,230,235,0.5);
+      --gallery: #16161a;
     }
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; overflow: hidden; }
-  #city-filter { font: inherit; font-size: 13px; font-weight: 500; color: var(--ink);
-    background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px;
-    flex: none; cursor: pointer; }
   svg { width: 100vw; height: 100vh; display: block; cursor: grab;
     transition: transform 0.55s cubic-bezier(0.5, 0, 0.2, 1), opacity 0.5s ease; }
   svg:active { cursor: grabbing; }
@@ -73,9 +73,7 @@ TEMPLATE = """<!doctype html>
     padding: 18px 24px; background: var(--panel); border-bottom: 1px solid var(--border); z-index: 2; }
   #detail-back { width: 36px; height: 36px; border-radius: 18px; border: none; flex: none;
     background: var(--bg); color: var(--ink); font-size: 16px; cursor: pointer; }
-  #detail-swatch { width: 34px; height: 34px; border-radius: 9px; flex: none; }
   #detail-title { font-size: 16px; font-weight: 600; letter-spacing: -0.2px; }
-  #detail-sub { font-size: 13px; color: var(--ink-muted); }
   .seg-toggle { position: relative; display: flex; gap: 2px; background: var(--bg);
     border-radius: 10px; padding: 2px; flex: none; }
   .seg-toggle-pill { position: absolute; top: 2px; height: calc(100% - 4px);
@@ -85,21 +83,83 @@ TEMPLATE = """<!doctype html>
     cursor: pointer; transition: color 0.28s ease; }
   .seg-toggle button.active { color: var(--ink); }
   #graph-view-toggle { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); z-index: 5; }
-  #detail-grid { padding: 20px 24px 60px; display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px;
-    transition: opacity 0.12s ease; }
-  #detail-grid.location-mode { display: block; }
-  .detail-group { margin-bottom: 28px; }
-  .detail-group-heading { font-size: 13px; font-weight: 600; color: var(--ink);
-    margin: 0 0 10px; letter-spacing: -0.1px; }
-  .detail-group-grid { display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
-  .detail-tile { position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden;
-    background: var(--bg); will-change: transform, opacity; }
-  .detail-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .detail-name { position: absolute; bottom: 4px; left: 5px; font-size: 10px; color: #fff;
-    background: rgba(0,0,0,0.45); padding: 2px 5px; border-radius: 5px; max-width: calc(100% - 10px);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* detail gallery — editorial scatter (photos at their natural aspect, mixed
+     sizes, staggered across a 12-col grid with lots of air) on a warm ground.
+     Positions are computed in JS (layoutScatter); under 700px it collapses to
+     a single full-width column, and small groups fit one row with no scroll. */
+  /* The page takes the open group's own colour as its ground (--g-bg, set in
+     openDetail); ink/control colours flip light or dark against it
+     (applyGalleryTheme) so text stays legible on any hex. */
+  #detail { background: var(--g-bg, var(--gallery)); color: var(--g-ink, var(--ink));
+    --ink: var(--g-ink); --ink-muted: var(--g-muted); }
+  #detail-header { position: static; flex-direction: column; justify-content: center; gap: 0;
+    padding: 64px 24px 24px; background: transparent; border-bottom: none; text-align: center; }
+  #detail-back { position: fixed; top: 18px; left: 24px; z-index: 5; padding: 0;
+    display: grid; place-items: center;
+    background: var(--g-chip); color: var(--g-ink);
+    -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+  /* override the graph's global svg rule (100vw/100vh, grab cursor, transition) */
+  #detail-back svg { display: block; width: 16px; height: 16px; cursor: inherit; transition: none; }
+  #detail-back { cursor: pointer; }
+  /* the hex title scrolls up at ~60% speed while shrinking, then pins at the
+     top level with the back button (no backing — photos pass under it) —
+     driven by updateDetailTitle on scroll */
+  /* fixed to the viewport (not in the scrolling flow) so the browser's
+     scroll can't drag it between JS updates — #detail-title-space holds its
+     place in the header */
+  #detail-title { position: fixed; top: 0; left: 0; right: 0; z-index: 4; text-align: center;
+    font-family: 'DotGothic16', monospace;
+    font-weight: 400; font-size: clamp(48px, 8vw, 104px); line-height: 1; letter-spacing: 0.5px;
+    transform-origin: 50% 0; will-change: transform; pointer-events: none; }
+  /* tabs: same shape as the main page's toggle, but no container fill — the
+     active tab is a soft translucent pill (padding kept at 2px: positionPill
+     offsets by it) */
+  #view-toggle { margin-top: 24px; background: transparent; }
+  #view-toggle .seg-toggle-pill { background: var(--g-tab); }
+  #view-toggle button { color: var(--g-muted); }
+  #view-toggle button.active { color: var(--g-ink); }
+  #detail-grid { padding: 24px 24px 120px; transition: opacity 0.12s ease; }
+  #detail-grid.fit-mode { padding-bottom: 24px; }
+  /* By Location sections: city in large translucent DotGothic, separated by
+     a hand-drawn wobbly, slightly slanted rule (wobblyDivider) */
+  .detail-group { margin-bottom: 0; }
+  .detail-group-heading { font-family: 'DotGothic16', monospace; font-weight: 400;
+    font-size: clamp(32px, 4.4vw, 56px); line-height: 1; letter-spacing: 0.5px;
+    color: var(--ink); opacity: 0.55; margin: 0 0 28px; }
+  .detail-group-count { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    font-size: 13px; letter-spacing: 0; vertical-align: top; margin-left: 6px; }
+  .detail-divider { margin: 72px 0 56px; color: var(--ink); opacity: 0.45; }
+  /* override the graph's global svg rule (100vw/100vh, grab cursor, transition) */
+  .detail-divider svg { display: block; width: 100%; height: 24px; cursor: auto; transition: none; }
+  .g-canvas { position: relative; }
+  .g-item { position: absolute; top: 0; left: 0; margin: 0; }
+  .g-body { transition: opacity 0.7s ease, transform 0.9s cubic-bezier(0.22, 1, 0.36, 1); }
+  .g-body.pending { opacity: 0; transform: translateY(40px); }
+  .g-frame { position: relative; overflow: hidden; background: var(--g-chip); }
+  .g-frame img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* sharp copy layered over the blurry inline thumbnail; fades in once loaded */
+  .g-frame img.detail-sharp { opacity: 0; transition: opacity 0.35s ease; }
+  .g-frame img.detail-sharp.loaded { opacity: 1; }
+  .g-cap { padding-top: 8px; font-size: 13px; line-height: 18px; color: var(--ink); }
+  .g-cap-title { font-weight: 500; letter-spacing: -0.1px; }
+  .g-cap-line { color: var(--ink-muted); font-size: 12px; line-height: 17px; }
+  .g-cap-more { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    opacity: 0; transform: translateY(-3px); transition: opacity 0.25s ease, transform 0.25s ease; }
+  .g-item:hover .g-cap-more { opacity: 1; transform: none; }
+  .g-palette { display: inline-flex; gap: 3px; }
+  .g-palette span { width: 10px; height: 10px; border-radius: 2px; }
+  /* touch screens have no hover — show everything */
+  @media (hover: none) { .g-cap-more { opacity: 1; transform: none; } }
+
+  /* single column on narrow screens: normal flow, full width, captions on */
+  .g-canvas.stack .g-item { position: relative; width: auto !important; left: auto !important;
+    top: auto !important; margin-bottom: 40px; }
+  .g-canvas.stack .g-cap-more { opacity: 1; transform: none; }
+  @media (max-width: 700px) {
+    #detail-header { padding: 64px 16px 16px; }
+    #detail-back { left: 16px; }
+    #detail-grid { padding: 16px 16px 80px; }
+  }
 </style>
 </head>
 <body>
@@ -113,18 +173,15 @@ TEMPLATE = """<!doctype html>
 
 <div id="detail">
   <div id="detail-header">
-    <button id="detail-back">←</button>
-    <div id="detail-swatch"></div>
-    <div>
-      <div id="detail-title"></div>
-      <div id="detail-sub"></div>
-    </div>
-    <div id="view-toggle" class="seg-toggle" style="margin-left:auto">
+    <button id="detail-back" aria-label="Back"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"
+      stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8H3M7.5 3.5 3 8l4.5 4.5"/></svg></button>
+    <div id="detail-title"></div>
+    <div id="detail-title-space"></div>
+    <div id="view-toggle" class="seg-toggle">
       <div class="seg-toggle-pill"></div>
       <button type="button" data-mode="flat" class="active">All</button>
       <button type="button" data-mode="location">By Location</button>
     </div>
-    <select id="city-filter"><option value="">All cities</option></select>
   </div>
   <div id="detail-grid"></div>
 </div>
@@ -303,7 +360,6 @@ function buildGraph(groupsData, edgesData, showColourDot = true) {
 
     const thumbs = buildThumbs(n);
     const thumbEls = [];       // { el, city } — used by the city filter to dim non-matches
-    const thumbByPath = {};    // photo.path -> <image> — start positions for the click FLIP
     // best matches (drawn last, on top) also get a slight head start facing the viewer
     for (const th of [...thumbs].reverse()) {
       const half = th.baseSide / 2;
@@ -325,10 +381,8 @@ function buildGraph(groupsData, edgesData, showColourDot = true) {
 
       th.g = tg;
       thumbEls.push({ el: img, city: th.photo.city || null });
-      thumbByPath[th.photo.path] = img;
     }
     n.thumbs = thumbs;
-    n.thumbByPath = thumbByPath;
 
     // invisible click/drag target (slightly larger than r to cover sphere overshoot)
     const hit = el('circle', { class: 'node-hit', r: n.r * 1.15 });
@@ -537,7 +591,9 @@ function positionPill(container, animate = true) {
   const pill = container.querySelector('.seg-toggle-pill');
   const activeBtn = container.querySelector('button.active');
   if (!pill || !activeBtn) return;
-  const left = activeBtn.offsetLeft - 2;
+  // offsetLeft and the pill's absolute `left` are both measured from the
+  // container's padding edge, so no padding correction is needed
+  const left = activeBtn.offsetLeft;
   const width = activeBtn.offsetWidth;
 
   if (!animate) {
@@ -669,46 +725,288 @@ function switchGraphView(mode) {
 graphViewButtons.forEach(b => b.addEventListener('click', () => switchGraphView(b.dataset.mode)));
 positionPill(graphViewToggle, false);
 
-// city filter (inner detail page) — dims non-matching thumbnails and relabels
-// counts, without touching layout/positions
-let activeCity = '';
-const cityFilter = document.getElementById('city-filter');
-const allCities = [...new Set(allPhotos.map(p => p.city).filter(Boolean))].sort();
-for (const c of allCities) {
-  const opt = document.createElement('option');
-  opt.value = c;
-  opt.textContent = c;
-  cityFilter.appendChild(opt);
-}
-
-// two detail-page view modes: 'flat' (one grid, city dropdown dims/orders it)
-// and 'location' (photos split into a section per city). Lives inside the
+// two detail-page view modes: 'flat' (one gallery) and 'location' (photos
+// split into a section per city). Lives inside the
 // detail header now — filters/regroups the currently open group in place
 // rather than touching the outer map.
 let openNode = null;
 let viewMode = 'flat';
 
+// ---- detail gallery -------------------------------------------------------
+
+function formatTakenAt(s) {
+  const d = s ? new Date(s) : null;  // EXIF time has no zone -> parsed as local, as shot
+  if (!d || isNaN(d)) return null;
+  return d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) +
+    ', ' + d.toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' });
+}
+
+function formatCamera(c) {
+  if (!c) return null;
+  const parts = [];
+  if (c.model) parts.push(c.model);
+  if (c.focal35) parts.push(`${Math.round(c.focal35)}mm`);
+  if (c.fnumber) parts.push(`f/${+c.fnumber.toFixed(1)}`);
+  if (c.exposure) parts.push(c.exposure >= 1 ? `${+c.exposure.toFixed(1)}s` : `1/${Math.round(1 / c.exposure)}s`);
+  if (c.iso) parts.push(`ISO ${Math.round(c.iso)}`);
+  return parts.join(' · ') || null;
+}
+
 function makeTile(p) {
-  const tile = document.createElement('div');
-  tile.className = 'detail-tile';
+  const tile = document.createElement('figure');
+  tile.className = 'g-item';
   tile.dataset.city = p.city || '';
-  if (viewMode === 'flat' && activeCity && p.city !== activeCity) tile.dataset.dim = '1';
+  tile.dataset.aspect = p.aspect || 0.75;
+
+  const body = document.createElement('div');
+  // born hidden: layout measures tiles before armReveal runs, so adding
+  // 'pending' later would animate a visible photo *out* first
+  body.className = 'g-body pending';
+  const frame = document.createElement('div');
+  frame.className = 'g-frame';
+  frame.style.aspectRatio = p.aspect || 0.75;
   const img = document.createElement('img');
   img.src = p.thumbnail;
-  img.loading = 'lazy';
-  const name = document.createElement('div');
-  name.className = 'detail-name';
-  name.textContent = p.city ? `${p.city} · ${p.path.split('/').pop()}` : p.path.split('/').pop();
-  tile.appendChild(img);
-  tile.appendChild(name);
+  img.alt = '';
+  frame.appendChild(img);
+  // the inline thumbnail is a placeholder; the full-size display copy loads
+  // behind it and fades in on top
+  if (p.display) {
+    const sharp = document.createElement('img');
+    sharp.className = 'detail-sharp';
+    sharp.loading = 'lazy';
+    sharp.decoding = 'async';
+    sharp.alt = '';
+    sharp.addEventListener('load', () => sharp.classList.add('loaded'));
+    sharp.src = p.display;
+    frame.appendChild(sharp);
+  }
+
+  // caption: place + time always; camera, palette and filename on hover
+  // (always on touch / single-column, see CSS)
+  const cap = document.createElement('figcaption');
+  cap.className = 'g-cap';
+  const title = document.createElement('div');
+  title.className = 'g-cap-title';
+  title.textContent = p.city || 'Unknown location';
+  cap.appendChild(title);
+  const when = formatTakenAt(p.taken_at);
+  if (when) {
+    const line = document.createElement('div');
+    line.className = 'g-cap-line';
+    line.textContent = when;
+    cap.appendChild(line);
+  }
+  const more = document.createElement('div');
+  more.className = 'g-cap-more';
+  const cameraText = formatCamera(p.camera);
+  if (cameraText) {
+    const cam = document.createElement('span');
+    cam.className = 'g-cap-line';
+    cam.textContent = cameraText;
+    more.appendChild(cam);
+  }
+  if (p.palette && p.palette.length) {
+    const pal = document.createElement('span');
+    pal.className = 'g-palette';
+    for (const hex of p.palette) {
+      const sw = document.createElement('span');
+      sw.style.background = hex;
+      sw.title = hex;
+      pal.appendChild(sw);
+    }
+    more.appendChild(pal);
+  }
+  const file = document.createElement('span');
+  file.className = 'g-cap-line';
+  file.textContent = p.path.split('/').pop();
+  more.appendChild(file);
+  cap.appendChild(more);
+
+  body.appendChild(frame);
+  body.appendChild(cap);
+  tile.appendChild(body);
   return tile;
 }
 
-// builds the grid content for the open node under the current viewMode,
-// returns the flat list of { tile, path } used to drive the FLIP-in animation
-function buildDetailGrid(n) {
+// Scatter layout: 12-column grid, each photo gets a span (size) and a zone
+// (left / centre / right…) from short repeating patterns, then drops to the
+// lowest y that clears everything already placed in its columns ("skyline")
+// AND sits a staggered step below the previous photo, so the page reads top
+// to bottom while photos zig-zag across it. Deterministic per group (seed),
+// so a resize or filter change re-flows the same composition.
+const GALLERY_COLS = 12;
+const GALLERY_GUTTER = 24;
+const GALLERY_STACK_BELOW = 700;        // px canvas width -> single column
+const GALLERY_SPANS = [3, 2, 4, 2, 3, 2, 3, 4, 2, 3];
+const GALLERY_ZONES = [0.02, 0.5, 0.98, 0.3, 0.75, 0.1, 0.6, 0.9, 0.4, 0.2];
+
+function layoutScatter(canvas, items, seed) {
+  const W = canvas.clientWidth;
+  if (W < GALLERY_STACK_BELOW) {
+    canvas.classList.add('stack');
+    canvas.style.height = '';
+    return;
+  }
+  canvas.classList.remove('stack');
+  const g = GALLERY_GUTTER, cols = GALLERY_COLS;
+  const colW = (W - g * (cols - 1)) / cols;
+  // tall phone portraits (9:16) would overrun the screen at the bigger spans
+  const maxH = Math.max(320, detail.clientHeight * 0.68);
+  const sky = new Array(cols).fill(0);
+  let lastY = -Infinity;
+  items.forEach((el, i) => {
+    const aspect = +el.dataset.aspect || 0.75;
+    let span = GALLERY_SPANS[(i + seed) % GALLERY_SPANS.length];
+    if (aspect > 1.2) span = Math.min(span + 2, 6);  // landscapes need width to read
+    const zone = GALLERY_ZONES[(i + seed * 3) % GALLERY_ZONES.length];
+    const start = Math.round(zone * (cols - span));
+    const spanW = span * colW + (span - 1) * g;
+    const w = Math.min(spanW, maxH * aspect);
+    el.style.width = w + 'px';
+    const h = el.offsetHeight;
+    const r = rnd(seed * 101 + i * 7.3);
+    const clear = Math.max(...sky.slice(start, start + span));
+    const y = i === 0 ? 0 : Math.max(clear + 48 + r * 120, lastY + 80 + r * 140);
+    // a height-capped photo hugs the outer edge of its span (left half of the
+    // page -> left, right half -> right) so the zig-zag stays wide
+    const x = start * (colW + g) + (zone > 0.5 ? spanW - w : 0);
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
+    for (let c = start; c < start + span; c++) sky[c] = y + h;
+    lastY = y;
+  });
+  canvas.style.height = Math.max(...sky) + 'px';
+}
+
+// Few photos: one centred row sized to fill the viewport — no scroll path.
+function layoutFit(canvas, items) {
+  canvas.classList.remove('stack');
+  const W = canvas.clientWidth;
+  const gap = W < GALLERY_STACK_BELOW ? 12 : 32;
+  const header = document.getElementById('detail-header');
+  const availH = Math.max(240, detail.clientHeight - header.offsetHeight - 48);
+  const aspects = items.map(el => +el.dataset.aspect || 0.75);
+  const sumA = aspects.reduce((a, b) => a + b, 0);
+  const rowW = W - gap * (items.length - 1);
+  // two passes: size the row, then re-fit once the real caption height is known
+  let capH = 60, h = 0;
+  for (let pass = 0; pass < 2; pass++) {
+    h = Math.min((availH - capH) * 0.86, rowW / sumA);
+    items.forEach((el, i) => { el.style.width = (aspects[i] * h) + 'px'; });
+    capH = Math.max(...items.map(el => el.offsetHeight)) - h;
+  }
+  const totalW = aspects.reduce((s, a) => s + a * h, 0) + gap * (items.length - 1);
+  let x = (W - totalW) / 2;
+  const y = Math.max(0, (availH - (h + capH)) / 2);
+  items.forEach((el, i) => {
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
+    x += aspects[i] * h + gap;
+  });
+  canvas.style.height = availH + 'px';
+}
+
+let galleryLayouts = [];  // [{ canvas, items, seed, fit }] for the open group
+
+function runGalleryLayouts() {
+  for (const L of galleryLayouts) {
+    if (L.fit) layoutFit(L.canvas, L.items);
+    else layoutScatter(L.canvas, L.items, L.seed);
+  }
+}
+
+// Every photo starts hidden ('.pending': faded + dropped 40px). Ones already
+// on screen rise in one at a time, top to bottom, after `startDelay` (opening
+// waits for the coloured page to finish fading in); the rest rise in as they
+// scroll into view.
+const REVEAL_STAGGER = 140;   // ms between on-screen photos
+const OPEN_REVEAL_DELAY = 450; // ≈ #detail's 0.42s opacity transition
+let revealGeneration = 0;      // stale staggered timers (re-open/re-layout) no-op
+
+const revealObserver = new IntersectionObserver((entries) => {
+  for (const e of entries) {
+    if (!e.isIntersecting) continue;
+    e.target.classList.remove('pending');
+    revealObserver.unobserve(e.target);
+  }
+}, { root: document.getElementById('detail'), rootMargin: '0px 0px -6% 0px' });
+
+function armReveal(startDelay = 0) {
+  revealObserver.disconnect();
+  const gen = ++revealGeneration;
+  const fold = detail.clientHeight;
+  const onScreen = [];
+  for (const L of galleryLayouts) {
+    for (const el of L.items) {
+      const body = el.firstChild;
+      body.classList.add('pending');
+      const top = el.getBoundingClientRect().top;
+      if (top < fold) onScreen.push({ body, top });
+      else revealObserver.observe(body);
+    }
+  }
+  onScreen.sort((a, b) => a.top - b.top).forEach(({ body }, i) => {
+    setTimeout(() => {
+      if (gen === revealGeneration) body.classList.remove('pending');
+    }, startDelay + i * REVEAL_STAGGER);
+  });
+}
+
+let galleryResizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(galleryResizeTimer);
+  galleryResizeTimer = setTimeout(() => { if (openNode) runGalleryLayouts(); }, 120);
+});
+
+function newCanvas(parent) {
+  const canvas = document.createElement('div');
+  canvas.className = 'g-canvas';
+  parent.appendChild(canvas);
+  return canvas;
+}
+
+// Hand-drawn rule between By Location sections: a gentle slant across the
+// width, a slow drift and a faint hand tremor — a line someone tried to draw
+// straight — plus a little jitter, smoothed through
+// quadratic midpoints. Seeded, so each divider keeps its own shape across
+// re-renders. Stretched to the page width; the stroke stays 1.5px thanks to
+// non-scaling-stroke.
+function wobblyDivider(seed) {
+  const W = 1000, H = 24, mid = H / 2, step = 25;
+  const slant = (rnd(seed) - 0.5) * 8;             // end-to-end tilt, ±4 units
+  const a1 = 1.2 + rnd(seed + 1) * 1.4, f1 = 0.003 + rnd(seed + 2) * 0.004, p1 = rnd(seed + 3) * 6.28;
+  const a2 = 0.25 + rnd(seed + 4) * 0.35, f2 = 0.04 + rnd(seed + 5) * 0.03, p2 = rnd(seed + 6) * 6.28;
+  const pts = [];
+  for (let x = 0; x <= W; x += step) {
+    const y = mid + slant * (x / W - 0.5) + a1 * Math.sin(x * f1 + p1) + a2 * Math.sin(x * f2 + p2) +
+      (rnd(seed * 7 + x) - 0.5) * 0.5;
+    pts.push([x, y]);
+  }
+  let d = `M${pts[0][0]},${pts[0][1].toFixed(2)}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [x, y] = pts[i], [nx, ny] = pts[i + 1];
+    d += ` Q${x},${y.toFixed(2)} ${(x + nx) / 2},${((y + ny) / 2).toFixed(2)}`;
+  }
+  const last = pts[pts.length - 1];
+  d += ` T${last[0]},${last[1].toFixed(2)}`;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'detail-divider';
+  wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">` +
+    `<path d="${d}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" ` +
+    `vector-effect="non-scaling-stroke"/></svg>`;
+  return wrap;
+}
+
+// builds the gallery for the open node under the current viewMode, lays it
+// out, and arms the one-at-a-time reveal (after `revealDelay` ms)
+function buildDetailGrid(n, revealDelay = 0) {
   detailGrid.innerHTML = '';
-  const tileRefs = [];
+  detail.scrollTop = 0;
+  galleryLayouts = [];
+  const seed = (n.id || 0) + 1;
+  const narrow = detailGrid.clientWidth - 48 < GALLERY_STACK_BELOW;
 
   if (viewMode === 'location') {
     detailGrid.classList.add('location-mode');
@@ -723,69 +1021,56 @@ function buildDetailGrid(n) {
       if (b === 'Unknown location') return -1;
       return a.localeCompare(b);
     });
-    for (const key of keys) {
+    keys.forEach((key, si) => {
       const photos = groups.get(key);
+      if (si > 0) detailGrid.appendChild(wobblyDivider(seed * 13 + si));
       const section = document.createElement('div');
       section.className = 'detail-group';
       const heading = document.createElement('div');
       heading.className = 'detail-group-heading';
-      heading.textContent = `${key} · ${photos.length}`;
-      const sectionGrid = document.createElement('div');
-      sectionGrid.className = 'detail-group-grid';
-      for (const p of photos) {
-        const tile = makeTile(p);
-        sectionGrid.appendChild(tile);
-        tileRefs.push({ tile, path: p.path });
-      }
+      heading.textContent = key;
+      const count = document.createElement('span');
+      count.className = 'detail-group-count';
+      count.textContent = photos.length;
+      heading.appendChild(count);
       section.appendChild(heading);
-      section.appendChild(sectionGrid);
       detailGrid.appendChild(section);
-    }
+      const canvas = newCanvas(section);
+      const items = photos.map(p => {
+        const tile = makeTile(p);
+        canvas.appendChild(tile);
+        return tile;
+      });
+      galleryLayouts.push({ canvas, items, seed: seed + si * 3, fit: false });
+    });
   } else {
     detailGrid.classList.remove('location-mode');
-    // matching photos (if filtered) lead, so they're visible without scrolling
-    const ordered = activeCity
-      ? [...n.photos].sort((a, b) => (b.city === activeCity) - (a.city === activeCity))
-      : n.photos;
-    for (const p of ordered) {
+    const ordered = n.photos;
+    const canvas = newCanvas(detailGrid);
+    const items = ordered.map(p => {
       const tile = makeTile(p);
-      detailGrid.appendChild(tile);
-      tileRefs.push({ tile, path: p.path });
-    }
+      canvas.appendChild(tile);
+      return tile;
+    });
+    const fit = ordered.length <= (narrow ? 2 : 4);
+    galleryLayouts.push({ canvas, items, seed, fit });
   }
-  return tileRefs;
+  detailGrid.classList.toggle('fit-mode', galleryLayouts.some(L => L.fit));
+  runGalleryLayouts();
+  armReveal(revealDelay);
 }
 
-function updateDetailSub(n) {
-  if (viewMode === 'location') {
-    const cities = new Set(n.photos.map(p => p.city).filter(Boolean));
-    const locCount = cities.size + (n.photos.some(p => !p.city) ? 1 : 0);
-    document.getElementById('detail-sub').textContent =
-      `${n.count} ${n.count === 1 ? 'photo' : 'photos'} across ${locCount} ${locCount === 1 ? 'location' : 'locations'}`;
-  } else {
-    const matchCount = activeCity ? n.photos.filter(p => p.city === activeCity).length : n.count;
-    document.getElementById('detail-sub').textContent = activeCity
-      ? `${matchCount} of ${n.count} photos in this group are from ${activeCity}`
-      : n.count + (n.count === 1 ? ' photo' : ' photos') + ' in this group';
-  }
-}
-
-// rebuilds the open group's grid in place (city filter change, view-mode
-// toggle) — no fly-in, the tiles just resettle with a quick crossfade
+// rebuilds the open group's grid in place (view-mode toggle) — a quick
+// crossfade, then the photos rise in one at a time again
 function refreshOpenGroup() {
   if (!openNode) return;
   const n = openNode;
-  updateDetailSub(n);
   detailGrid.style.opacity = '0';
   setTimeout(() => {
     buildDetailGrid(n);
     detailGrid.style.opacity = '1';
   }, 120);
 }
-cityFilter.addEventListener('change', () => {
-  activeCity = cityFilter.value;
-  refreshOpenGroup();
-});
 
 const viewToggle = document.getElementById('view-toggle');
 const viewToggleButtons = document.querySelectorAll('#view-toggle button');
@@ -794,7 +1079,6 @@ function setViewMode(mode) {
   viewMode = mode;
   viewToggleButtons.forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
   positionPill(viewToggle);
-  cityFilter.style.display = mode === 'location' ? 'none' : '';
   refreshOpenGroup();
 }
 viewToggleButtons.forEach(b => b.addEventListener('click', () => setViewMode(b.dataset.mode)));
@@ -803,65 +1087,92 @@ positionPill(viewToggle, false);
 const detail = document.getElementById('detail');
 const detailGrid = document.getElementById('detail-grid');
 
+// WCAG relative luminance -> pick whichever of white/near-black ink has the
+// higher contrast against the group's hex, and derive the controls from it
+function applyGalleryTheme(hex) {
+  const lin = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+  const h = hex.replace('#', '');
+  const L = 0.2126 * lin(parseInt(h.slice(0, 2), 16)) +
+            0.7152 * lin(parseInt(h.slice(2, 4), 16)) +
+            0.0722 * lin(parseInt(h.slice(4, 6), 16));
+  const darkInk = (L + 0.05) / 0.05 > 1.05 / (L + 0.05);
+  const s = detail.style;
+  s.setProperty('--g-bg', hex);
+  s.setProperty('--g-ink', darkInk ? 'rgba(0,0,0,0.88)' : 'rgba(255,255,255,0.95)');
+  s.setProperty('--g-muted', darkInk ? 'rgba(0,0,0,0.58)' : 'rgba(255,255,255,0.7)');
+  s.setProperty('--g-chip', darkInk ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.16)');
+  s.setProperty('--g-tab', darkInk ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.2)');
+}
+
+// Shrinking, pinning title. It's position:fixed, so its on-screen top is set
+// directly from scrollTop: eased from its header slot (#detail-title-space) to
+// level with the back button over
+// PARALLAX x that distance of scroll (so it drifts up slower than the photos),
+// scaling down to TITLE_PINNED_PX on the way, then hold it there.
+const detailTitle = document.getElementById('detail-title');
+const TITLE_BAR_CENTRE = 36;   // matches the back button's centre (18 + 36/2)
+const TITLE_PARALLAX = 1.6;
+let titleMetrics = null;
+
+const detailTitleSpace = document.getElementById('detail-title-space');
+
+function measureDetailTitle() {
+  const fontPx = parseFloat(getComputedStyle(detailTitle).fontSize);
+  const pinnedPx = window.innerWidth < GALLERY_STACK_BELOW ? 22 : 28;
+  const h = detailTitle.offsetHeight;
+  detailTitleSpace.style.height = h + 'px';
+  titleMetrics = { top: detailTitleSpace.offsetTop, h, s: Math.min(1, pinnedPx / fontPx) };
+  updateDetailTitle();
+}
+
+function updateDetailTitle() {
+  if (!titleMetrics) return;
+  const { top, h, s: sMin } = titleMetrics;
+  const pinnedTop = TITLE_BAR_CENTRE - (h * sMin) / 2;
+  const range = Math.max(1, (top - pinnedTop) * TITLE_PARALLAX);
+  const st = detail.scrollTop;
+  const t = Math.min(1, Math.max(0, st / range));
+  const scale = 1 + (sMin - 1) * t;
+  const visualTop = top + (pinnedTop - top) * t;
+  detailTitle.style.transform = `translateY(${visualTop}px) scale(${scale})`;
+}
+
+let titleFrame = null;
+detail.addEventListener('scroll', () => {
+  if (titleFrame) return;
+  titleFrame = requestAnimationFrame(() => { titleFrame = null; updateDetailTitle(); });
+}, { passive: true });
+window.addEventListener('resize', () => { if (openNode) measureDetailTitle(); });
+
 function openDetail(n) {
   openNode = n;
-  // 1. capture each preview thumbnail's on-screen rect BEFORE the graph zooms,
-  //    so the grid tiles can fly out from exactly where they sat in the cluster
-  const startRects = {};
-  for (const path in n.thumbByPath) {
-    startRects[path] = n.thumbByPath[path].getBoundingClientRect();
-  }
   const nodeX = n.x, nodeY = n.y;
 
-  document.getElementById('detail-swatch').style.background = n.centroid_hex;
-  document.getElementById('detail-title').textContent = n.label;
-  updateDetailSub(n);
+  // opened from the Locations map the group is already a single city, so the
+  // All / By Location tabs have nothing to split — hide them, force 'flat'
+  const fromLocations = graphMode === 'location';
+  viewToggle.style.display = fromLocations ? 'none' : '';
+  if (fromLocations) viewMode = 'flat';
+  viewToggleButtons.forEach(b => b.classList.toggle('active', b.dataset.mode === viewMode));
+  if (!fromLocations) positionPill(viewToggle, false);
+
+  applyGalleryTheme(n.centroid_hex);
+  detailTitle.textContent = n.label;
 
   detailGrid.style.opacity = '1';
-  const tileRefs = buildDetailGrid(n);
+  // every photo starts hidden; once the coloured page has faded in they rise
+  // in one at a time (see armReveal)
+  buildDetailGrid(n, OPEN_REVEAL_DELAY);
+  measureDetailTitle();
 
-  // 2. "fly into the node": the whole graph scales up toward the clicked node
-  //    and fades, so the viewer feels pulled in through it
+  // "fly into the node": the whole graph scales up toward the clicked node
+  // and fades while the coloured page fades in over it
   svg.style.transformOrigin = nodeX + 'px ' + nodeY + 'px';
   svg.style.transform = 'scale(2.6)';
   svg.style.opacity = '0';
   svg.style.pointerEvents = 'none';
-
-  // 3. reveal the detail surface (bg fades in) and FLIP each tile from its
-  //    cluster position into its grid cell — the pile reorganising into a grid
   detail.classList.add('open');
   detail.scrollTop = 0;
-
-  requestAnimationFrame(() => {
-    for (const { tile, path } of tileRefs) {
-      const fr = tile.getBoundingClientRect();
-      const sr = startRects[path];
-      let dx, dy, scale, startOpacity;
-      if (sr) {
-        dx = (sr.left + sr.width / 2) - (fr.left + fr.width / 2);
-        dy = (sr.top + sr.height / 2) - (fr.top + fr.height / 2);
-        scale = Math.max(sr.width, 6) / fr.width;
-        startOpacity = '1';
-      } else {
-        // photos not shown in the cluster preview spawn from the node centre
-        dx = nodeX - (fr.left + fr.width / 2);
-        dy = nodeY - (fr.top + fr.height / 2);
-        scale = 0.16;
-        startOpacity = '0';
-      }
-      tile.style.transition = 'none';
-      tile.style.transform = `translate(${dx}px, ${dy}px) scale(${scale})`;
-      tile.style.opacity = startOpacity;
-    }
-    void detailGrid.offsetWidth; // flush the start state before animating
-    tileRefs.forEach(({ tile }, idx) => {
-      const delay = Math.min(idx * 11, 240);
-      tile.style.transition =
-        `transform 0.62s cubic-bezier(0.22, 1, 0.36, 1) ${delay}ms, opacity 0.42s ease ${delay}ms`;
-      tile.style.transform = 'none';
-      tile.style.opacity = tile.dataset.dim ? '0.3' : '1';
-    });
-  });
 }
 
 function closeDetail() {

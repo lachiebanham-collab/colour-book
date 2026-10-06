@@ -5,7 +5,10 @@ colour groups -> render the node-link diagram. Re-run any time after adding
 photos to the source folder; already-processed photos are skipped.
 
 Usage:
-    python3 run.py "/path/to/photos" [--groups N] [--force]
+    python3 run.py "/path/to/photos" [--groups N] [--force] [--fresh]
+
+--fresh re-clusters from scratch instead of warm-starting from the existing
+groups (which keeps groups stable as photos are added or removed).
 """
 import subprocess
 import sys
@@ -36,6 +39,8 @@ def main():
     cluster_cmd = [sys.executable, str(PROJECT_DIR / "cluster.py"), str(CACHE), str(GROUPS)]
     if n_groups:
         cluster_cmd.append(n_groups)
+    if "--fresh" in sys.argv:
+        cluster_cmd.append("--fresh")
     subprocess.run(cluster_cmd, check=True)
 
     subprocess.run([sys.executable, str(PROJECT_DIR / "visualize.py"), str(GROUPS), str(HTML)], check=True)

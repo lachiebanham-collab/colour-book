@@ -98,14 +98,22 @@ def lab_to_srgb(lab):
     return np.clip(rgb * 255, 0, 255)
 
 
-def kmeans(points, k, iterations=ITERATIONS, restarts=RESTARTS, seed=7):
+def kmeans(points, k, iterations=ITERATIONS, restarts=RESTARTS, seed=7, init=None):
+    """Best-of-`restarts` k-means. With `init` (k starting centroids, e.g. the
+    previous run's groups) it runs once from there instead: random restarts
+    land in different local optima whenever the photo set changes even
+    slightly, which reshuffles every group; warm-starting keeps existing groups
+    and just lets them drift to absorb added/removed photos."""
     rng = np.random.default_rng(seed)
     best_inertia = None
     best_centroids = None
     best_assignments = None
 
-    for r in range(restarts):
-        centroids = points[rng.choice(len(points), size=k, replace=False)].copy()
+    for r in range(1 if init is not None else restarts):
+        if init is not None:
+            centroids = np.array(init, dtype=np.float64)
+        else:
+            centroids = points[rng.choice(len(points), size=k, replace=False)].copy()
         assignments = None
         for _ in range(iterations):
             dists = ((points[:, None, :] - centroids[None, :, :]) ** 2).sum(axis=2)
@@ -166,7 +174,19 @@ def main():
     lab = srgb_to_lab(dominant_rgb)
 
     n_groups = min(n_groups, len(keys))
-    centroids_lab, assignments = kmeans(lab, n_groups)
+
+    # warm start from the previous groups.json when it has the same number of
+    # groups (pass --fresh to re-cluster from scratch)
+    init = None
+    if groups_path.exists() and "--fresh" not in sys.argv:
+        with open(groups_path) as f:
+            prev = json.load(f).get("groups", [])
+        if len(prev) == n_groups:
+            prev_rgb = np.array([[int(g["centroid_hex"][i:i + 2], 16) for i in (1, 3, 5)] for g in prev],
+                                dtype=np.float64)
+            init = srgb_to_lab(prev_rgb)
+            print(f"Warm-starting from the {n_groups} groups in {groups_path.name}")
+    centroids_lab, assignments = kmeans(lab, n_groups, init=init)
     centroids_rgb = lab_to_srgb(centroids_lab)
 
     groups = []
@@ -188,6 +208,10 @@ def main():
                 "path": k,
                 "hex": cache[k]["colours"][0]["hex"],
                 "thumbnail": cache[k].get("thumbnail"),
+                "display": cache[k].get("display"),
+                "aspect": cache[k].get("aspect"),
+                "camera": cache[k].get("camera"),
+                "palette": [c["hex"] for c in cache[k]["colours"]],
                 "city": city_tags.get(k),
                 "taken_at": cache[k].get("taken_at"),
             })
